@@ -1,0 +1,11 @@
+name = "blagrs"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-08-02"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[[d1_databases]]
+binding = "DB" # available in your Worker on env.DB
+database_name = "blag-db"
+database_id = "d54dd511-9d7d-4f7b-87ae-b09716e192eb"

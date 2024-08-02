@@ -16,21 +16,60 @@ struct PostNewForm {
     password: String,
 }
 
+static CSS: &str = r#"
+  <style>
+    html {
+      font-family: monospace;
+      padding: 16px;
+    }
+
+    nav > a {
+      padding: 4px;
+      color: white;
+      background: black;
+    }
+
+    .feed {
+      max-width: 500px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .card {
+        padding: 16px;
+        border: 2px solid black;
+    }
+
+    .card .title, .card .content {
+        font-size: 1.5rem;
+    }
+
+    form {
+        margin-top: 24px;
+    }
+</style>
+"#;
+
+static NAV: &str = r#"
+<nav>
+    <a href="/feed">Feed</a>
+    <a href="/post/form">New post</a>
+    <a href="/posts">Posts JSON</a>
+</nav>
+"#;
+
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
 
     Router::new()
-        .get_async("/", |_, _ctx| async move {
-            // A greeting when accessing the root.
+        .get_async("/", |_req, _ctx| async move {
             Response::from_html(r#"
             <!doctype html>
-                <nav>
-                    <a href="/">Home</a>
-                    <a href="/posts">Posts</a>
-                    <a href="/feed">Feed</a>
-                    <a href="/post/form">New post</a>
-                </nav>"#)
+            <script>
+              window.location.href = "/feed";
+            </script>
+            {{NAV}}"#.replace("{{NAV}}", NAV))
         })
         .get_async("/posts", |_, ctx| async move {
             let d1 = ctx.env.d1("DB")?;
@@ -40,43 +79,46 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             dbg!(posts);
             Response::from_json(&result.results::<Post>().unwrap())
         })
-        .get_async("/feed", |_, ctx| async move {
-           
-            // return html with polling from /posts
+        .get_async("/feed", |_, _ctx| async move {
             Response::from_html(
                 r#"
                 <!doctype html>
-                <nav>
-                    <a href="/">Home</a>
-                    <a href="/posts">Posts</a>
-                    <a href="/feed">Feed</a>
-                    <a href="/post/form">New post</a>
-                </nav>
+                <head>
+                    {{CSS}}
+                </head>
+                <body>
+                {{NAV}}
                 <h1>Feed</h1>
-                <div id="feed"></div>
+                <p>🟢 Live <span id="refreshedAt"></span></p>
+                <div id="feed" class="feed">
+                </div>
                 <script>
                     async function fetchPosts() {
                         const response = await fetch('/posts');
                         const posts = await response.json();
                         const feed = document.getElementById('feed');
                         feed.innerHTML = posts.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map(post => `
-                            <div>
-                                <h2>${post.title}</h2>
-                                <p>${post.content}</p>
-                                <p>${post.created_at}</p>
+                            <div class="card">
+                                <h2 class="title">${post.title}</h2>
+                                <p class="content">${post.content}</p>
+                                <p class="created">${post.created_at}</p>
                             </div>
                         `).join('');
+                        const refreshed = document.getElementById('refreshedAt');
+                        refreshed.innerText = new Date().toLocaleTimeString();
                     }
 
                     fetchPosts();
                     setInterval(fetchPosts, 5000);
                 </script>
-                "#)
+                </body>
+                "#.replace("{{CSS}}", CSS)
+                .replace("{{NAV}}", NAV))
         })
         .get_async("/posts/:id", |_, ctx| async move {
             let id = ctx.param("id").unwrap();
             let d1 = ctx.env.d1("DB")?;
-            let statement = d1.prepare("SELECT * FROM posts WHERE id = ?1");
+            let statement: D1PreparedStatement = d1.prepare("SELECT * FROM posts WHERE id = ?1");
             let query = statement.bind(&[id.into()])?;
             let result = query.first::<Post>(None).await?;
             match result {
@@ -85,12 +127,10 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             }
         })
         .post_async("/post/form", |mut req, ctx| async move {
-            // let payload = req.json::<Post>().await?;
-
             let payload = req.form_data().await?;
 
-            let supersecure = "???";
-            if (payload.get_field("password").expect("no password") != supersecure) {
+            let supersecure = ctx.env.secret("PASSWORD")?.to_string();
+            if payload.get_field("password").expect("no password") != supersecure {
                 return Response::error("Unauthorized", 401);
             }
 
@@ -114,20 +154,19 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             Response::from_html(
                 r#"
                 <!doctype html>
-                <nav>
-                    <a href="/">Home</a>
-                    <a href="/posts">Posts</a>
-                    <a href="/feed">Feed</a>
-                    <a href="/post/form">New post</a>
-                </nav>
-                <form action="/post/form" method="post" style="display: flex; flex-direction: column; gap: 16px;">
+                <head>
+                    {{CSS}}
+                </head>
+                <body>
+                {{NAV}}
+                <form action="/post/form" method="post" style="display: flex; flex-direction: column; gap: 16px; max-width: 800px;">
                     <label>
                       <div>Title</div>
-                      <input type="text" name="title" required />
+                      <input type="text" name="title" required spellcheck style="width: 100%" />
                     </label>
                     <label>
                       <div>Content</div>
-                      <textarea name="content" spellcheck style="width: 100%; height: 400px;" required></textarea>
+                      <textarea name="content" spellcheck style="width: 100%; min-height: 200px;" required></textarea>
                     </label>
 
                     <label>
@@ -137,7 +176,8 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                     
                     <button type="submit">Submit</button>
                 </form>
-            "#,
+                </body>
+            "#.replace("{{CSS}}", CSS).replace("{{NAV}}", NAV),
             )
         })
         .run(req, env)

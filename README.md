@@ -6,6 +6,10 @@ PoC for liveblog on Cloudflare Workers + D1
    Configure demo password in `src/lib.rs`.
    Configure `wrangler.toml`.
 
+   ```
+   PASSWORD=<set local password>
+   ```
+
    ```bash
    $ npx wrangler d1 execute blag-db --local --file=./schema.sql
    $ npx wrangler dev
@@ -13,6 +17,7 @@ PoC for liveblog on Cloudflare Workers + D1
 
 3. Deploy:
    ```bash
+   $ npx wrangler secret put PASSWORD
    $ npx wrangler d1 execute blag-db --remote --file=./schema.sql
    $ npx wrangler deploy
    ```

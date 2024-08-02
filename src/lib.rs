@@ -60,6 +60,7 @@ static CSS: &str = r#"
     .card {
         padding: 16px;
         border: 2px solid black;
+        overflow: auto;
     }
 
     .card .title, .card .content {
@@ -68,6 +69,10 @@ static CSS: &str = r#"
 
     form {
         margin-top: 24px;
+    }
+
+    img {
+        max-width: 100%;
     }
 </style>
 "#;

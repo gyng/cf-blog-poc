@@ -16,6 +16,28 @@ struct PostNewForm {
     password: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct PostResponse {
+    id: u32,
+    title: String,
+    content: String,
+    created_at: String,
+    content_html: String,
+}
+
+impl From<&Post> for PostResponse {
+    fn from(value: &Post) -> Self {
+        let clone = &value.content.clone();
+        PostResponse {
+            id: value.id,
+            title: value.title.clone(),
+            content: value.content.clone(),
+            created_at: value.created_at.clone(),
+            content_html: markdown::to_html(clone),
+        }
+    }
+}
+
 static CSS: &str = r#"
   <style>
     html {
@@ -75,9 +97,11 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let d1 = ctx.env.d1("DB")?;
             let statement = d1.prepare("SELECT * FROM posts");
             let result = statement.all().await?;
-            let posts = &result.results::<Post>().unwrap();
-            dbg!(posts);
-            Response::from_json(&result.results::<Post>().unwrap())
+            let posts: Vec<Post> = result.results::<Post>().unwrap();
+            let post_responses: Vec<PostResponse> = posts.iter().map(|p: &Post|
+                p.into()
+            ).collect();
+            Response::from_json(&post_responses)
         })
         .get_async("/feed", |_, _ctx| async move {
             Response::from_html(
@@ -100,7 +124,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                         feed.innerHTML = posts.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map(post => `
                             <div class="card">
                                 <h2 class="title">${post.title}</h2>
-                                <p class="content">${post.content}</p>
+                                <p class="content">${post.content_html}</p>
                                 <p class="created">${post.created_at}</p>
                             </div>
                         `).join('');

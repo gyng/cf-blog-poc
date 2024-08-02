@@ -21,3 +21,4 @@ console_error_panic_hook = { version = "0.1.1" }
 http = "1.1"
 serde = "1.0.204"
 chrono = "0.4.38"
+markdown = "1.0.0-alpha.18"

@@ -189,7 +189,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                       <input type="text" name="title" required spellcheck style="width: 100%" />
                     </label>
                     <label>
-                      <div>Content</div>
+                      <div>Content (Markdown supported)</div>
                       <textarea name="content" spellcheck style="width: 100%; min-height: 200px;" required></textarea>
                     </label>
 

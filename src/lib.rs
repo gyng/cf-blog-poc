@@ -37,7 +37,7 @@ impl From<&ThreadModel> for ThreadView {
 struct PostModel {
     id: u64,
     thread_id: u64,
-    title: String,
+    author: String,
     content: String,
     created_at: String,
 }
@@ -52,7 +52,7 @@ struct PostNewRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct PostView {
     id: u64,
-    title: String,
+    author: String,
     content: String,
     created_at: String,
     content_html: String,
@@ -69,7 +69,7 @@ impl From<&PostModel> for PostView {
         let clone = &value.content.clone();
         PostView {
             id: value.id,
-            title: value.title.clone(),
+            author: value.author.clone(),
             content: value.content.clone(),
             created_at: value.created_at.clone(),
             content_html: markdown::to_html(clone),
@@ -90,7 +90,7 @@ static CSS: &str = r#"
     }
 
     nav {
-      margin-bottom: 16px;
+      margin-bottom: 32px;
     }
 
     nav > a {
@@ -100,19 +100,26 @@ static CSS: &str = r#"
     }
 
     .feed {
-      max-width: 500px;
+      width: 100%;
+      max-width: 600px;
       display: grid;
       gap: 12px;
     }
 
     .card {
-        padding: 16px;
-        border: 2px solid black;
-        overflow: auto;
+      padding: 16px;
+      border: 2px solid black;
+      overflow: auto;
     }
 
-    img {
-        max-width: 100%;
+    .content {
+      font-size: 1.5rem;
+    }
+
+    .content img {
+      max-width: 100%;
+      max-height: 400px;
+      margin: 8px auto;
     }
 </style>
 "#;
@@ -227,8 +234,8 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                         document.getElementById('threads').innerHTML = threads.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map(thread => `
                             <a href="/ui/threads/${thread.id}/feed">
                                 <div class="card">
+                                    <div class="created">${new Date(thread.created_at).toLocaleString()}</div>
                                     <h2 class="title">${thread.title}</h2>
-                                    <p class="created">${new Date(thread.created_at).toLocaleString()}</p>
                                 </div>
                             </a>
                         `).join('');
@@ -245,26 +252,63 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(_) => return Response::error("Bad ID", 400),
             };
             Response::from_html(template(r#"
-            <h1 id="threadTitle">Feed</h1>
+            <h1 id="threadTitle">&nbsp;</h1>
                 <p>🟢 Live <span id="refreshedAt"></span></p>
                 <div id="feed" class="feed">
                 </div>
                 <script>
+                    // https://stackoverflow.com/questions/6108819/javascript-timestamp-to-relative-time
+                    function relativeTimeAgo(d1) {
+                        // in miliseconds
+                        var units = {
+                            year  : 24 * 60 * 60 * 1000 * 365,
+                            month : 24 * 60 * 60 * 1000 * 365/12,
+                            day   : 24 * 60 * 60 * 1000,
+                            hour  : 60 * 60 * 1000,
+                            minute: 60 * 1000,
+                            second: 1000
+                        }
+
+                        var rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+
+                        var getRelativeTime = (d1, d2 = new Date()) => {
+                            var elapsed = d1 - d2;
+
+                            // "Math.abs" accounts for both "past" & "future" scenarios
+                            for (var u in units) 
+                                if (Math.abs(elapsed) > units[u] || u == 'second') 
+                                    return rtf.format(Math.round(elapsed/units[u]), u);
+                        }
+
+                        return getRelativeTime(d1);
+                    }
+
+                    // Don't update HTML if no change
+                    let lastUpdate = null;
+
                     async function fetchPosts() {
                         const response = await fetch('/threads/{{ID}}/feed.json');
-                        const feed = await response.json();
-
-                        document.getElementById('threadTitle').innerText = feed.thread.title;
-      
-                        document.getElementById('feed').innerHTML = feed.posts.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map(post => `
-                            <div class="card">
-                                <h2 class="title">${post.title}</h2>
-                                <p class="content">${post.content_html}</p>
-                                <p class="created">${new Date(post.created_at).toLocaleString()}</p>
-                            </div>
-                        `).join('');
+                        const body = await response.text();
+                        const feed = JSON.parse(body);
+                        
                         const refreshed = document.getElementById('refreshedAt');
                         refreshed.innerText = new Date().toLocaleTimeString();
+                        document.title = feed.thread.title;
+
+                        if (lastUpdate === body) {
+                            return;
+                        } else {
+                            lastUpdate = body;
+                        }
+
+                        document.getElementById('threadTitle').innerText = feed.thread.title;
+                        document.getElementById('feed').innerHTML = feed.posts.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map(post => `
+                            <div class="card">
+                                <div class="created">${relativeTimeAgo(new Date(post.created_at))}, ${new Date(post.created_at).toLocaleString()}</div>
+                                <div class="content">${post.content_html}</div>
+                                <div class="author">${post.author}</div>
+                            </div>
+                        `).join('');
                     }
 
                     fetchPosts();
@@ -285,10 +329,10 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let now = chrono::offset::Utc::now().to_rfc3339();
 
             let statement =
-                d1.prepare("INSERT INTO posts (thread_id, title, content, created_at) VALUES (?1, ?2, ?3, ?4)");
+                d1.prepare("INSERT INTO posts (thread_id, author, content, created_at) VALUES (?1, ?2, ?3, ?4)");
             let query = statement.bind(&[
                 payload.get_field("thread_id").expect("no thread_id").into(),
-                payload.get_field("title").expect("no title").into(),
+                payload.get_field("author").expect("no author").into(),
                 payload.get_field("content").expect("no content").into(),
                 now.into(),
             ])?;
@@ -371,8 +415,8 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                     </label>
 
                     <label>
-                    <div>Title</div>
-                    <input type="text" name="title" required spellcheck style="width: 100%" />
+                    <div>Author</div>
+                    <input type="text" name="author" required spellcheck style="width: 100%" placeholder="Ah Beng, crime reporter"/>
                     </label>
 
                     <label>

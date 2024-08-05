@@ -1,34 +1,73 @@
+use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 use worker::*;
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Post {
-    id: u32,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ThreadModel {
+    id: u64,
+    title: String,
+    created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ThreadNewRequest {
+    title: String,
+    password: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ThreadView {
+    id: u64,
+    title: String,
+    created_at: String,
+}
+
+impl From<&ThreadModel> for ThreadView {
+    fn from(value: &ThreadModel) -> Self {
+        ThreadView {
+            id: value.id,
+            title: value.title.clone(),
+            created_at: value.created_at.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct PostModel {
+    id: u64,
+    thread_id: u64,
     title: String,
     content: String,
     created_at: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct PostNewForm {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct PostNewRequest {
     title: String,
     content: String,
     password: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct PostResponse {
-    id: u32,
+struct PostView {
+    id: u64,
     title: String,
     content: String,
     created_at: String,
     content_html: String,
 }
 
-impl From<&Post> for PostResponse {
-    fn from(value: &Post) -> Self {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct FeedView {
+    thread: ThreadView,
+    posts: Vec<PostView>,
+}
+
+impl From<&PostModel> for PostView {
+    fn from(value: &PostModel) -> Self {
         let clone = &value.content.clone();
-        PostResponse {
+        PostView {
             id: value.id,
             title: value.title.clone(),
             content: value.content.clone(),
@@ -43,6 +82,15 @@ static CSS: &str = r#"
     html {
       font-family: monospace;
       padding: 16px;
+    }
+
+    ol, ul {
+      margin: 0;
+      padding: 0;
+    }
+
+    nav {
+      margin-bottom: 16px;
     }
 
     nav > a {
@@ -63,14 +111,6 @@ static CSS: &str = r#"
         overflow: auto;
     }
 
-    .card .title, .card .content {
-        font-size: 1.5rem;
-    }
-
-    form {
-        margin-top: 24px;
-    }
-
     img {
         max-width: 100%;
     }
@@ -79,11 +119,30 @@ static CSS: &str = r#"
 
 static NAV: &str = r#"
 <nav>
-    <a href="/feed">Feed</a>
-    <a href="/post/form">New post</a>
-    <a href="/posts">Posts JSON</a>
+    <a href="/ui/threads">Threads</a>
+    <a href="/admin_ui/thread/form">New thread</a>
+    <a href="/admin_ui/post/form">New post</a>
+    <a href="/posts.json">Posts JSON</a>
+    <a href="/threads.json">Threads JSON</a>
+    <a href="/threads/2/feed.json">Thread feed JSON</a>
 </nav>
 "#;
+
+fn template<S: AsRef<str> + Display>(body: S) -> String {
+    format!(
+        r#"
+        <!doctype html>
+        <head>
+            {}
+        </head>
+        <body>
+            {}
+            {}
+        </body>
+    "#,
+        CSS, NAV, body
+    )
+}
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -94,43 +153,114 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             Response::from_html(r#"
             <!doctype html>
             <script>
-              window.location.href = "/feed";
+              window.location.href = "/ui/threads";
             </script>
             {{NAV}}"#.replace("{{NAV}}", NAV))
         })
-        .get_async("/posts", |_, ctx| async move {
+
+        .get_async("/posts.json", |_, ctx| async move {
             let d1 = ctx.env.d1("DB")?;
             let statement = d1.prepare("SELECT * FROM posts");
             let result = statement.all().await?;
-            let posts: Vec<Post> = result.results::<Post>().unwrap();
-            let post_responses: Vec<PostResponse> = posts.iter().map(|p: &Post|
+            let posts: Vec<PostModel> = result.results::<PostModel>().unwrap();
+            let post_responses: Vec<PostView> = posts.iter().map(|p: &PostModel|
                 p.into()
             ).collect();
             Response::from_json(&post_responses)
         })
-        .get_async("/feed", |_, _ctx| async move {
-            Response::from_html(
-                r#"
-                <!doctype html>
-                <head>
-                    {{CSS}}
-                </head>
-                <body>
-                {{NAV}}
-                <h1>Feed</h1>
+        .get_async("/threads.json", |_, ctx| async move {
+            let d1 = ctx.env.d1("DB")?;
+            let statement = d1.prepare("SELECT * FROM threads");
+            let result = statement.all().await?;
+            let threads: Vec<ThreadModel> = result.results().unwrap();
+            let threads_response: Vec<ThreadView> = threads.iter().map(|t: &ThreadModel| {
+                ThreadView {
+                    id: t.id,
+                    title: t.title.clone(),
+                    created_at: t.created_at.clone(),
+                }
+            }).collect();
+            Response::from_json(&threads_response)
+        })
+        .get_async("/threads/:id/feed.json", |_, ctx| async move {
+            let id: String = match ctx.param("id").unwrap().parse::<u64>() {
+                Ok(id) => id.to_string(),
+                Err(_) => return Response::error("Bad ID", 400),
+            };
+
+            let d1 = ctx.env.d1("DB")?;
+
+            let thread_statement: D1PreparedStatement = d1.prepare("SELECT * FROM threads t WHERE t.id = ?1");
+            let thread_query = thread_statement.bind(&[id.clone().into()])?;
+            let thread_result = thread_query.first::<ThreadModel>(None).await?;
+            let thread = if let Some(t) = thread_result {
+                t
+            } else {
+                return Response::error("Not found", 404);
+            };
+
+            let posts_statement: D1PreparedStatement = d1.prepare("SELECT * FROM posts p WHERE p.thread_id = ?1 ORDER BY p.created_at DESC");
+            let posts_query = posts_statement.bind(&[id.into()])?;
+            let posts_result = posts_query.all().await?;
+            let posts: Vec<PostModel> = posts_result.results::<PostModel>().unwrap();
+            let posts_response : Vec<PostView> = posts.iter().map(|p: &PostModel| {
+                p.into()
+            }).collect();
+
+            let feed_response = FeedView {
+                thread: (&thread).into(),
+                posts: posts_response,
+            };
+
+            Response::from_json(&feed_response)
+        })
+
+        .get_async("/ui/threads", |_, _| async move {
+            Response::from_html(template(r#"
+            <h1>Threads</h1>
+                <ul id="threads" class="feed threads"></ul>
+                <script>
+                    async function fetchThreads() {
+                        const response = await fetch('/threads.json');
+                        const threads = await response.json();
+      
+                        document.getElementById('threads').innerHTML = threads.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map(thread => `
+                            <a href="/ui/threads/${thread.id}/feed">
+                                <div class="card">
+                                    <h2 class="title">${thread.title}</h2>
+                                    <p class="created">${new Date(thread.created_at).toLocaleString()}</p>
+                                </div>
+                            </a>
+                        `).join('');
+                    }
+                    fetchThreads();
+                    setInterval(fetchThreads, 5000);
+                </script>
+            
+            "#))
+        })
+        .get_async("/ui/threads/:id/feed", |_, ctx| async move {
+            let id: String = match ctx.param("id").unwrap().parse::<u64>() {
+                Ok(id) => id.to_string(),
+                Err(_) => return Response::error("Bad ID", 400),
+            };
+            Response::from_html(template(r#"
+            <h1 id="threadTitle">Feed</h1>
                 <p>🟢 Live <span id="refreshedAt"></span></p>
                 <div id="feed" class="feed">
                 </div>
                 <script>
                     async function fetchPosts() {
-                        const response = await fetch('/posts');
-                        const posts = await response.json();
-                        const feed = document.getElementById('feed');
-                        feed.innerHTML = posts.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map(post => `
+                        const response = await fetch('/threads/{{ID}}/feed.json');
+                        const feed = await response.json();
+
+                        document.getElementById('threadTitle').innerText = feed.thread.title;
+      
+                        document.getElementById('feed').innerHTML = feed.posts.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map(post => `
                             <div class="card">
                                 <h2 class="title">${post.title}</h2>
                                 <p class="content">${post.content_html}</p>
-                                <p class="created">${post.created_at}</p>
+                                <p class="created">${new Date(post.created_at).toLocaleString()}</p>
                             </div>
                         `).join('');
                         const refreshed = document.getElementById('refreshedAt');
@@ -140,22 +270,37 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                     fetchPosts();
                     setInterval(fetchPosts, 5000);
                 </script>
-                </body>
-                "#.replace("{{CSS}}", CSS)
-                .replace("{{NAV}}", NAV))
+            
+            "#.replace("{{ID}}", &id)))
         })
-        .get_async("/posts/:id", |_, ctx| async move {
-            let id = ctx.param("id").unwrap();
+        .post_async("/post/form_handler", |mut req, ctx| async move {
+            let payload = req.form_data().await.expect("no payload");
+            
+            let supersecure = ctx.env.secret("PASSWORD")?.to_string();
+            if payload.get_field("password").expect("no password") != supersecure {
+                return Response::error("Unauthorized", 401);
+            }
+
             let d1 = ctx.env.d1("DB")?;
-            let statement: D1PreparedStatement = d1.prepare("SELECT * FROM posts WHERE id = ?1");
-            let query = statement.bind(&[id.into()])?;
-            let result = query.first::<Post>(None).await?;
-            match result {
-                Some(post) => Response::from_json(&post),
-                None => Response::error("Not found", 404),
+            let now = chrono::offset::Utc::now().to_rfc3339();
+
+            let statement =
+                d1.prepare("INSERT INTO posts (thread_id, title, content, created_at) VALUES (?1, ?2, ?3, ?4)");
+            let query = statement.bind(&[
+                payload.get_field("thread_id").expect("no thread_id").into(),
+                payload.get_field("title").expect("no title").into(),
+                payload.get_field("content").expect("no content").into(),
+                now.into(),
+            ])?;
+
+            let result = query.run().await;
+            if result.is_ok() {
+                Response::ok("post created")
+            } else {
+                Response::error("Failed to create post", 500)
             }
         })
-        .post_async("/post/form", |mut req, ctx| async move {
+        .post_async("/thread/form_handler", |mut req, ctx| async move {
             let payload = req.form_data().await?;
 
             let supersecure = ctx.env.secret("PASSWORD")?.to_string();
@@ -167,47 +312,82 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let now = chrono::offset::Utc::now().to_rfc3339();
 
             let statement =
-                d1.prepare("INSERT INTO posts (title, content, created_at) VALUES (?1, ?2, ?3)");
+                d1.prepare("INSERT INTO threads (title, created_at) VALUES (?1, ?2)");
             let query = statement.bind(&[
                 payload.get_field("title").expect("no title").into(),
-                payload.get_field("content").expect("no content").into(),
                 now.into(),
             ])?;
 
-            let result = query.run().await?;
-
-            console_log!("result: {:?}", result.success());
-            Response::ok(format!("Successfully added: {:?}", payload))
+            let result = query.run().await;
+            if result.is_ok() {
+                Response::ok("thread created")
+            } else {
+                Response::error("Failed to create thread", 500)
+            }
         })
-        .get_async("/post/form", |_, _ctx| async move {
-            Response::from_html(
-                r#"
-                <!doctype html>
-                <head>
-                    {{CSS}}
-                </head>
-                <body>
-                {{NAV}}
-                <form action="/post/form" method="post" style="display: flex; flex-direction: column; gap: 16px; max-width: 800px;">
+        
+        
+        .get_async("/admin_ui/thread/form", |_, _: RouteContext<()>| async move {
+            Response::from_html(template(r#"
+                <h1>New thread</h1>
+                <form action="/thread/form_handler" method="post" style="display: flex; flex-direction: column; gap: 16px; max-width: 800px;">
                     <label>
-                      <div>Title</div>
-                      <input type="text" name="title" required spellcheck style="width: 100%" />
-                    </label>
-                    <label>
-                      <div>Content (Markdown supported)</div>
-                      <textarea name="content" spellcheck style="width: 100%; min-height: 200px;" required></textarea>
+                        <div>Title</div>
+                        <input type="text" name="title" required style="width: 100%;" />
                     </label>
 
                     <label>
-                      <div>Password</div>
-                      <input type="password" name="password" required />
+                        <div>Password</div>
+                        <input type="password" name="password" required />
+                    </label>
+                    
+                    <button type="submit">Submit</button>
+                </form>"#))
+        })
+        .get_async("/admin_ui/post/form", |_, _| async move {
+            Response::from_html(template(r#"
+                <script>
+                  async function init() {
+                    const response = await fetch('/threads.json');
+                    let threads = await response.json();
+                    threads = [{ id: "", title: '(select a thread)' }, ...threads];
+                    const select = document.querySelector('select[name="thread_id"]');
+                    threads.forEach(thread => {
+                      const option = document.createElement('option');
+                      option.value = thread.id;
+                      option.innerText = thread.title;
+                      select.appendChild(option);
+                    });
+                    select.disabled = false;
+                  }
+                  document.addEventListener('DOMContentLoaded', init);
+                </script>
+                <h1>New post</h1>
+                <form action="/post/form_handler" method="post" style="display: flex; flex-direction: column; gap: 16px; max-width: 800px;">
+                    <label>
+                    <div>Thread</div>
+                        <select name="thread_id" disabled>
+                        </select>
+                    </label>
+
+                    <label>
+                    <div>Title</div>
+                    <input type="text" name="title" required spellcheck style="width: 100%" />
+                    </label>
+
+                    <label>
+                    <div>Content (Markdown supported)</div>
+                    <textarea name="content" spellcheck style="width: 100%; min-height: 200px;" required></textarea>
+                    </label>
+
+                    <label>
+                    <div>Password</div>
+                    <input type="password" name="password" required />
                     </label>
                     
                     <button type="submit">Submit</button>
                 </form>
-                </body>
-            "#.replace("{{CSS}}", CSS).replace("{{NAV}}", NAV),
-            )
+          "#))
         })
         .run(req, env)
         .await

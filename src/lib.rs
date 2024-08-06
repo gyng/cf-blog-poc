@@ -43,10 +43,9 @@ struct PostModel {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct PostNewRequest {
-    title: String,
+struct PostPreviewRequest {
+    author: String,
     content: String,
-    password: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -127,6 +126,18 @@ static CSS: &str = r#"
       max-width: 100%;
       max-height: 400px;
       margin: 8px auto;
+    }
+
+    .preview-form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      border: 1px solid black;
+      padding: 16px;
+    }
+
+    .hide {
+      display: none;
     }
 </style>
 "#;
@@ -376,8 +387,25 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Response::error("Failed to create thread", 500)
             }
         })
-        
-        
+        .post_async("/admin_ui/post/preview", |mut req, ctx| async move {
+            let supersecure = "Bearer ".to_string() + &(ctx.env.secret("PASSWORD")?.to_string());
+            let auth = req.headers().get("Authorization").expect("no auth header").unwrap();
+            if auth != supersecure {
+            return Response::error("Unauthorized", 401);
+            }
+
+            let body: PostPreviewRequest = req.json().await?;
+            let post_model = PostModel {
+                id: 0,
+                thread_id: 0,
+                content: body.content,
+                author: body.author,
+                created_at: chrono::offset::Utc::now().to_rfc3339(),
+            };
+            let post_response = PostView::from(&post_model);
+
+            Response::from_json(&post_response)
+        })
         .get_async("/admin_ui/thread/form", |_, _: RouteContext<()>| async move {
             Response::from_html(template(r#"
                 <h1>New thread</h1>
@@ -398,7 +426,34 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/admin_ui/post/form", |_, _| async move {
             Response::from_html(template(r#"
                 <script>
-                  async function init() {
+                  async function addPreview() {
+                    document.getElementById('preview').addEventListener('click', async (ev) => {
+                        ev.preventDefault();
+                        const password = document.querySelector('input[name="password"]').value;
+                        if (!password) {
+                            alert('Password required');
+                            return;
+                        }
+                        const response = await fetch('/admin_ui/post/preview', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + password
+                        },
+                        body: JSON.stringify({
+                            content: document.querySelector('textarea[name="content"]').value,
+                            author: document.querySelector('input[name="author"]').value
+                        })
+                        });
+                        const post = await response.json();
+                        document.getElementById('preview-date').innerText = "1 minute ago, " + new Date().toLocaleString();
+                        document.getElementById('preview-content').innerHTML = post.content_html;
+                        document.getElementById('preview-author').innerText = post.author;
+                        document.getElementById('preview-card').classList.remove('hide');
+                    });
+                  }
+
+                  async function fetchThreads() {
                     const response = await fetch('/threads.json');
                     let threads = await response.json();
                     threads = [{ id: "", title: '(select a thread)' }, ...threads];
@@ -411,7 +466,14 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                     });
                     select.disabled = false;
                   }
+
+                  async function init() {
+                    fetchThreads();
+                    addPreview();
+                  }
                   document.addEventListener('DOMContentLoaded', init);
+
+                  
                 </script>
                 <h1>New post</h1>
                 <form action="/post/form_handler" method="post" style="display: flex; flex-direction: column; gap: 16px; max-width: 800px;">
@@ -435,6 +497,15 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                     <div>Password</div>
                     <input type="password" name="password" required />
                     </label>
+
+                    <div class="preview-form">
+                      <div id="preview-card" class="card hide">
+                          <div id="preview-date"></div>
+                          <div id="preview-content" class="content"></div>
+                          <div id="preview-author"></div>
+                      </div>
+                      <button id="preview">Preview</button>
+                    </div>
                     
                     <button type="submit">Submit</button>
                 </form>

@@ -72,7 +72,14 @@ impl From<&PostModel> for PostView {
             author: value.author.clone(),
             content: value.content.clone(),
             created_at: value.created_at.clone(),
-            content_html: markdown::to_html(clone),
+            content_html: markdown::to_html_with_options(clone, &markdown::Options {
+                compile: markdown::CompileOptions {
+                  allow_dangerous_html: true,
+                  allow_dangerous_protocol: true,
+                  ..markdown::CompileOptions::default()
+                },
+                ..markdown::Options::default()
+            }).expect("failed to generate markdown"),
         }
     }
 }

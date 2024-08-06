@@ -71,14 +71,18 @@ impl From<&PostModel> for PostView {
             author: value.author.clone(),
             content: value.content.clone(),
             created_at: value.created_at.clone(),
-            content_html: markdown::to_html_with_options(clone, &markdown::Options {
-                compile: markdown::CompileOptions {
-                  allow_dangerous_html: true,
-                  allow_dangerous_protocol: true,
-                  ..markdown::CompileOptions::default()
+            content_html: markdown::to_html_with_options(
+                clone,
+                &markdown::Options {
+                    compile: markdown::CompileOptions {
+                        allow_dangerous_html: true,
+                        allow_dangerous_protocol: true,
+                        ..markdown::CompileOptions::default()
+                    },
+                    ..markdown::Options::default()
                 },
-                ..markdown::Options::default()
-            }).expect("failed to generate markdown"),
+            )
+            .expect("failed to generate markdown"),
         }
     }
 }
@@ -337,7 +341,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .post_async("/post/form_handler", |mut req, ctx| async move {
             let payload = req.form_data().await.expect("no payload");
-            
+
             let supersecure = ctx.env.secret("PASSWORD")?.to_string();
             if payload.get_field("password").expect("no password") != supersecure {
                 return Response::error("Unauthorized", 401);
@@ -391,7 +395,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let supersecure = "Bearer ".to_string() + &(ctx.env.secret("PASSWORD")?.to_string());
             let auth = req.headers().get("Authorization").expect("no auth header").unwrap();
             if auth != supersecure {
-            return Response::error("Unauthorized", 401);
+                return Response::error("Unauthorized", 401);
             }
 
             let body: PostPreviewRequest = req.json().await?;

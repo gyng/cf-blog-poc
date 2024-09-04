@@ -191,7 +191,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let d1 = ctx.env.d1("DB")?;
             let statement = d1.prepare("SELECT * FROM posts");
             let result = statement.all().await?;
-            let posts: Vec<PostModel> = result.results::<PostModel>().unwrap();
+            let posts: Vec<PostModel> = result.results::<PostModel>()?;
             let post_responses: Vec<PostView> = posts.iter().map(|p: &PostModel|
                 p.into()
             ).collect();
@@ -201,7 +201,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let d1 = ctx.env.d1("DB")?;
             let statement = d1.prepare("SELECT * FROM threads");
             let result = statement.all().await?;
-            let threads: Vec<ThreadModel> = result.results().unwrap();
+            let threads: Vec<ThreadModel> = result.results()?;
             let threads_response: Vec<ThreadView> = threads.iter().map(|t: &ThreadModel| {
                 ThreadView {
                     id: t.id,
@@ -212,9 +212,12 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             Response::from_json(&threads_response)
         })
         .get_async("/threads/:id/feed.json", |_, ctx| async move {
-            let id: String = match ctx.param("id").unwrap().parse::<u64>() {
-                Ok(id) => id.to_string(),
-                Err(_) => return Response::error("Bad ID", 400),
+            let id: String = match ctx.param("id") {
+                Some(id) => match id.parse::<u64>() {
+                    Ok(id) => id.to_string(),
+                    Err(_) => { return Response::error("Bad ID", 400) },
+                },
+                None => { return Response::error("Missing ID", 400) },
             };
 
             let d1 = ctx.env.d1("DB")?;
@@ -231,7 +234,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let posts_statement: D1PreparedStatement = d1.prepare("SELECT * FROM posts p WHERE p.thread_id = ?1 ORDER BY p.created_at DESC");
             let posts_query = posts_statement.bind(&[id.into()])?;
             let posts_result = posts_query.all().await?;
-            let posts: Vec<PostModel> = posts_result.results::<PostModel>().unwrap();
+            let posts = posts_result.results::<PostModel>()?;
             let posts_response : Vec<PostView> = posts.iter().map(|p: &PostModel| {
                 p.into()
             }).collect();
@@ -269,9 +272,12 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "#))
         })
         .get_async("/ui/threads/:id/feed", |_, ctx| async move {
-            let id: String = match ctx.param("id").unwrap().parse::<u64>() {
-                Ok(id) => id.to_string(),
-                Err(_) => return Response::error("Bad ID", 400),
+            let id: String = match ctx.param("id") {
+                Some(id) => match id.parse::<u64>() {
+                    Ok(id) => id.to_string(),
+                    Err(_) => { return Response::error("Bad ID", 400) },
+                },
+                None => { return Response::error("Missing ID", 400) },
             };
             Response::from_html(template(r#"
             <h1 id="threadTitle">&nbsp;</h1>
@@ -342,9 +348,16 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/post/form_handler", |mut req, ctx| async move {
             let payload = req.form_data().await.expect("no payload");
 
-            let supersecure = ctx.env.secret("PASSWORD")?.to_string();
-            if payload.get_field("password").expect("no password") != supersecure {
-                return Response::error("Unauthorized", 401);
+            match payload.get_field("password") {
+                Some(pw) => {
+                    let secret = ctx.env.secret("PASSWORD")?.to_string();
+                    if pw != secret {
+                        return Response::error("Unauthorized", 401);
+                    }
+                },
+                None => {
+                    return Response::error("Unauthorized", 401);
+                }
             }
 
             let d1 = ctx.env.d1("DB")?;
@@ -369,9 +382,16 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/thread/form_handler", |mut req, ctx| async move {
             let payload = req.form_data().await?;
 
-            let supersecure = ctx.env.secret("PASSWORD")?.to_string();
-            if payload.get_field("password").expect("no password") != supersecure {
-                return Response::error("Unauthorized", 401);
+            match payload.get_field("password") {
+                Some(pw) => {
+                    let secret = ctx.env.secret("PASSWORD")?.to_string();
+                    if pw != secret {
+                        return Response::error("Unauthorized", 401);
+                    }
+                },
+                None => {
+                    return Response::error("Unauthorized", 401);
+                }
             }
 
             let d1 = ctx.env.d1("DB")?;
@@ -392,10 +412,16 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             }
         })
         .post_async("/admin_ui/post/preview", |mut req, ctx| async move {
-            let supersecure = "Bearer ".to_string() + &(ctx.env.secret("PASSWORD")?.to_string());
-            let auth = req.headers().get("Authorization").expect("no auth header").unwrap();
-            if auth != supersecure {
-                return Response::error("Unauthorized", 401);
+            match req.headers().get("Authorization") {
+                Ok(Some(auth)) => {
+                    let secret = "Bearer ".to_string() + &(ctx.env.secret("PASSWORD")?.to_string());
+                    if auth != secret {
+                        return Response::error("Unauthorized", 401);
+                    }
+                },
+                _ => {
+                    return Response::error("Unauthorized", 401);
+                }
             }
 
             let body: PostPreviewRequest = req.json().await?;
